@@ -41,9 +41,9 @@ class BertOutputAdaptersMixin(AdapterLayerBaseMixin):
 class BertLayerAdaptersMixin:
     """Adds adapters to the BertLayer module."""
 
-    def add_fusion_layer(self, adapter_names):
-        self.attention.output.add_fusion_layer(adapter_names)
-        self.output.add_fusion_layer(adapter_names)
+    def add_fusion_layer(self, adapter_names, mode="dynamic"):
+        self.attention.output.add_fusion_layer(adapter_names, mode=mode)
+        self.output.add_fusion_layer(adapter_names, mode=mode)
 
     def add_adapter(self, adapter_name: str, layer_idx: int):
         self.attention.output.add_adapter(adapter_name, layer_idx)
@@ -67,9 +67,9 @@ class BertLayerAdaptersMixin:
 class BertEncoderAdaptersMixin:
     """Adds adapters to the BertEncoder module."""
 
-    def add_fusion_layer(self, adapter_names):
+    def add_fusion_layer(self, adapter_names, mode="dynamic"):
         for layer in self.layer:
-            layer.add_fusion_layer(adapter_names)
+            layer.add_fusion_layer(adapter_names, mode=mode)
 
     def add_adapter(self, adapter_name: str):
         adapter_config = self.config.adapters.get(adapter_name)
@@ -132,8 +132,8 @@ class BertModelAdaptersMixin(InvertibleAdaptersMixin, ModelAdaptersMixin):
         self.encoder.add_adapter(adapter_name)
         self.add_invertible_adapter(adapter_name)
 
-    def _add_fusion_layer(self, adapter_names):
-        self.encoder.add_fusion_layer(adapter_names)
+    def _add_fusion_layer(self, adapter_names, mode="dynamic"):
+        self.encoder.add_fusion_layer(adapter_names, mode=mode)
 
     def _delete_adapter(self, adapter_name: str):
         self.encoder.delete_adapter(adapter_name)

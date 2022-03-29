@@ -48,6 +48,7 @@ class AdapterTrainer(Trainer):
         callbacks: Optional[List[TrainerCallback]] = None,
         adapter_names: Optional[List[List[str]]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        train_adapter_fusion: bool = True,
     ):
         super().__init__(
             model,
@@ -75,7 +76,7 @@ class AdapterTrainer(Trainer):
                 isinstance(self.model.active_adapters, Fuse)
                 or isinstance(self.model.active_adapters, AdapterCompositionBlock)
                 and any([isinstance(child, Fuse) for child in self.model.active_adapters.children])
-            )
+            ) and train_adapter_fusion
         if model.active_adapters is None:
             raise ValueError(
                 "Expected a model with an active adapter setup."

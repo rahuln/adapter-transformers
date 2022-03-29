@@ -964,6 +964,7 @@ class RobertaModelWithHeads(BertModelHeadsMixin, RobertaPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             adapter_names=adapter_names,
+            **kwargs,
         )
         # BERT & RoBERTa return the pooled output as second item, we don't need that in these heads
         if not return_dict:

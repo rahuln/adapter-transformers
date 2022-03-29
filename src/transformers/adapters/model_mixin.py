@@ -161,7 +161,7 @@ class ModelAdaptersMixin(PushAdapterToHubMixin, ABC):
         pass
 
     @abstractmethod
-    def _add_fusion_layer(self, adapter_names):
+    def _add_fusion_layer(self, adapter_names, mode="dynamic"):
         pass
 
     def has_adapters(self):
@@ -242,6 +242,7 @@ class ModelAdaptersMixin(PushAdapterToHubMixin, ABC):
         config=None,
         overwrite_ok: bool = False,
         set_active: bool = False,
+        mode: str = "dynamic",
     ):
         """
         Adds AdapterFusion to the model with alll the necessary configurations and weight initializations
@@ -271,7 +272,7 @@ class ModelAdaptersMixin(PushAdapterToHubMixin, ABC):
         if overwrite_ok and self.config.adapters.get_fusion(adapter_names) is not None:
             self.delete_adapter_fusion(adapter_names)
         self.config.adapters.add_fusion(adapter_names, config=config)
-        self.base_model._add_fusion_layer(adapter_names)
+        self.base_model._add_fusion_layer(adapter_names, mode=mode)
         if set_active:
             if not isinstance(adapter_names, list):
                 adapter_names = adapter_names.split(",")
@@ -723,15 +724,15 @@ class ModelWithHeadsAdaptersMixin(ModelAdaptersMixin):
         else:
             self.base_model._add_adapter(adapter_name)
 
-    def _add_fusion_layer(self, adapter_names):
+    def _add_fusion_layer(self, adapter_names, mode="dynamic"):
         """
         If self.base_model is self, must inherit from a class that implements this method, to preclude infinite
         recursion
         """
         if self.base_model is self:
-            super()._add_fusion_layer(adapter_names)
+            super()._add_fusion_layer(adapter_names, mode=mode)
         else:
-            self.base_model._add_fusion_layer(adapter_names)
+            self.base_model._add_fusion_layer(adapter_names, mode=mode)
 
     def save_head(self, save_directory: str, head_name: str = None):
         loader = PredictionHeadLoader(self)

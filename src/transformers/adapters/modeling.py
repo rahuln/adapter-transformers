@@ -2,6 +2,7 @@ import math
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from .configuration import AdapterFusionConfig
 
@@ -238,6 +239,42 @@ class BertFusion(nn.Module):
             context_layer += residual
 
         return context_layer
+
+
+class BertSwitchFusion(nn.Module):
+    """
+    Implementation of an AdapterFusion block with per-example conditional
+    compute across adapters.
+    """
+
+    def __init__(
+        self,
+        config: AdapterFusionConfig,
+        dense_size,
+    ):
+        super(BertSwitchFusion, self).__init__()
+        self.config = config
+        self.dense_size = dense_size
+
+    def forward(self, inputs, adapter_outputs, adapter_outputs_copy, residual,
+        adapter_indices=None, **kwargs):
+        # adapter_outputs have dims => batch, toks, number-of-adapters, feats
+        bsz, seqlen, num_adapters, _ = adapter_outputs.size()
+
+        if self.config["residual_before"]:
+            adapter_outputs += residual[:, :, None, :].repeat(1, 1, num_adapters, 1)
+
+        # use adapter indices to select adapter output per example in batch
+        outputs = adapter_outputs[torch.arange(bsz), :, adapter_indices, :]
+        # # Old implementation, matrix multiplication instead of indexing
+        # adapter_weights = F.one_hot(adapter_indices, num_classes=num_adapters).float()
+        # adapter_weights = adapter_weights.unsqueeze(1).unsqueeze(3).repeat(1, seqlen, 1, 1).transpose(-2, -1)
+        # outputs = torch.matmul(adapter_weights, adapter_outputs).squeeze(2)
+
+        if not self.config["residual_before"]:
+            outputs += residual
+
+        return outputs
 
 
 # Invertible Adapters

@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 from .composition import AdapterCompositionBlock, BatchSplit, Fuse, Parallel, Split, Stack, parse_composition
-from .modeling import Adapter, BertFusion
+from .modeling import Adapter, BertFusion, BertSwitchFusion
 
 
 class AdapterLayerBaseMixin(ABC):
@@ -71,16 +71,24 @@ class AdapterLayerBaseMixin(ABC):
         if adapter_name in self.adapters:
             del self.adapters[adapter_name]
 
-    def add_fusion_layer(self, adapter_names: Union[List, str]):
+    def add_fusion_layer(self, adapter_names: Union[List, str], mode="dynamic"):
         """See BertModel.add_fusion_layer"""
         adapter_names = adapter_names if isinstance(adapter_names, list) else adapter_names.split(",")
         if self.config.adapters.common_config_value(adapter_names, self.adapter_config_key):
             fusion_config = self.config.adapters.get_fusion(adapter_names)
-            fusion = BertFusion(
-                fusion_config,
-                self.config.hidden_size,
-                self.config.attention_probs_dropout_prob,
-            )
+            if mode == "dynamic":
+                fusion = BertFusion(
+                    fusion_config,
+                    self.config.hidden_size,
+                    self.config.attention_probs_dropout_prob,
+                )
+            elif mode == "switch":
+                fusion = BertSwitchFusion(
+                    fusion_config,
+                    self.config.hidden_size,
+                )
+            else:
+                raise ValueError(f"unrecognized fusion mode: {mode}")
             fusion.train(self.training)  # make sure training mode is consistent
             self.adapter_fusion_layer[",".join(adapter_names)] = fusion
 
@@ -154,7 +162,7 @@ class AdapterLayerBaseMixin(ABC):
 
         return hidden_states, query, residual
 
-    def adapter_stack(self, adapter_setup: Stack, hidden_states, input_tensor, lvl=0):
+    def adapter_stack(self, adapter_setup: Stack, hidden_states, input_tensor, lvl=0, **kwargs):
         """
         Forwards the given input through the given stack of adapters.
         """
@@ -168,7 +176,7 @@ class AdapterLayerBaseMixin(ABC):
                 )
             # Case 1: We have a nested fusion layer -> call fusion method
             if isinstance(adapter_stack_layer, Fuse):
-                hidden_states = self.adapter_fusion(adapter_stack_layer, hidden_states, input_tensor, lvl=lvl + 1)
+                hidden_states = self.adapter_fusion(adapter_stack_layer, hidden_states, input_tensor, lvl=lvl + 1, **kwargs)
             # Case 2: We have a nested split layer -> call split method
             elif isinstance(adapter_stack_layer, Split):
                 hidden_states = self.adapter_split(adapter_stack_layer, hidden_states, input_tensor, lvl=lvl + 1)
@@ -196,7 +204,7 @@ class AdapterLayerBaseMixin(ABC):
         # or no adapter was found. In both cases, we don't need to set the second return value for fusion
         return hidden_states, None, input_tensor
 
-    def adapter_fusion(self, adapter_setup: Fuse, hidden_states, input_tensor, lvl=0):
+    def adapter_fusion(self, adapter_setup: Fuse, hidden_states, input_tensor, lvl=0, **kwargs):
         """
         Performs adapter fusion with the given adapters for the given input.
         """
@@ -238,6 +246,7 @@ class AdapterLayerBaseMixin(ABC):
                 up_list,
                 up_list,
                 residual,
+                **kwargs,
             )
 
         return hidden_states
@@ -448,9 +457,9 @@ class AdapterLayerBaseMixin(ABC):
         )
         if not skip_adapters and (len(set(self.adapters.keys()) & adapter_setup.flatten()) > 0):
             if isinstance(adapter_setup, Stack):
-                hidden_states, _, input_tensor = self.adapter_stack(adapter_setup, hidden_states, input_tensor)
+                hidden_states, _, input_tensor = self.adapter_stack(adapter_setup, hidden_states, input_tensor, **kwargs)
             elif isinstance(adapter_setup, Fuse):
-                hidden_states = self.adapter_fusion(adapter_setup, hidden_states, input_tensor)
+                hidden_states = self.adapter_fusion(adapter_setup, hidden_states, input_tensor, **kwargs)
             elif isinstance(adapter_setup, Split):
                 hidden_states = self.adapter_split(adapter_setup, hidden_states, input_tensor)
             elif isinstance(adapter_setup, Parallel):
