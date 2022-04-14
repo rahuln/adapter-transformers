@@ -277,6 +277,42 @@ class BertSwitchFusion(nn.Module):
         return outputs
 
 
+class BertWeightedAverageFusion(nn.Module):
+    # Implementation of an AdapterFusion block that computes a weighted average
+    # of outputs across adapters.
+
+    def __init__(
+        self,
+        config: AdapterFusionConfig,
+        dense_size,
+        num_adapters,
+    ):
+        super(BertWeightedAverageFusion, self).__init__()
+        self.config = config
+        self.dense_size = dense_size
+        self.num_adapters = num_adapters
+        self.fusion_weights = torch.nn.Parameter(torch.ones(num_adapters))
+
+    def forward(self, inputs, adapter_outputs, adapter_outputs_copy, residual,
+        **kwargs):
+        # adapter_outputs have dims => batch, toks, number-of-adapters, feats
+
+        if self.config["residual_before"]:
+            adapter_outputs += residual[:, :, None, :].repeat(1, 1, num_adapters, 1)
+
+        # convert unnormalized weights to weights, add dimensions to weights
+        # parameter, multiply with adapter outputs, and average across the
+        # adapters dimension
+        weights = torch.softmax(self.fusion_weights, dim=0)
+        outputs = weights[None, None, :, None] * adapter_outputs
+        outputs = torch.sum(outputs, dim=2)
+
+        if not self.config["residual_before"]:
+            outputs += residual
+
+        return outputs
+
+
 # Invertible Adapters
 
 

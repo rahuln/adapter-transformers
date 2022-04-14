@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 from .composition import AdapterCompositionBlock, BatchSplit, Fuse, Parallel, Split, Stack, parse_composition
-from .modeling import Adapter, BertFusion, BertSwitchFusion
+from .modeling import Adapter, BertFusion, BertSwitchFusion, BertWeightedAverageFusion
 
 
 class AdapterLayerBaseMixin(ABC):
@@ -86,6 +86,12 @@ class AdapterLayerBaseMixin(ABC):
                 fusion = BertSwitchFusion(
                     fusion_config,
                     self.config.hidden_size,
+                )
+            elif mode == "weighted-average":
+                fusion = BertWeightedAverageFusion(
+                    fusion_config,
+                    self.config.hidden_size,
+                    len(adapter_names),
                 )
             else:
                 raise ValueError(f"unrecognized fusion mode: {mode}")
