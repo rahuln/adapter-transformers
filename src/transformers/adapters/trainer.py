@@ -49,6 +49,7 @@ class AdapterTrainer(Trainer):
         adapter_names: Optional[List[List[str]]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         train_adapter_fusion: bool = True,
+        adapter_fusion_reg_loss: bool = True,
     ):
         super().__init__(
             model,
@@ -59,7 +60,8 @@ class AdapterTrainer(Trainer):
             tokenizer=tokenizer,
             model_init=model_init,
             compute_metrics=compute_metrics,
-            callbacks=[AdapterTrainerCallback(self)] + callbacks if callbacks else [AdapterTrainerCallback(self)],
+            callbacks=[AdapterTrainerCallback(self, adapter_fusion_reg_loss=adapter_fusion_reg_loss)] + callbacks
+                       if callbacks else [AdapterTrainerCallback(self, adapter_fusion_reg_loss=adapter_fusion_reg_loss)],
             optimizers=optimizers,
         )
 
@@ -240,9 +242,10 @@ class AdapterTrainer(Trainer):
 
 
 class AdapterTrainerCallback(TrainerCallback):
-    def __init__(self, trainer):
+    def __init__(self, trainer, adapter_fusion_reg_loss=True):
         super().__init__()
         self.trainer = trainer
+        self.adapter_fusion_reg_loss = adapter_fusion_reg_loss
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         model = kwargs.pop("model")
@@ -274,7 +277,7 @@ class AdapterTrainerCallback(TrainerCallback):
     def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # apply adapter fusion weight regularization on the value matrix
         model = kwargs.pop("model")
-        if self.trainer.train_adapter_fusion:
+        if self.trainer.train_adapter_fusion and self.adapter_fusion_reg_loss:
             fusion_reg_loss = model.base_model.get_fusion_regularization_loss()
             fusion_reg_loss.backward()
 
