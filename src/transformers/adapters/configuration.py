@@ -375,6 +375,7 @@ class AdapterFusionConfig(Mapping):
     temperature: bool
     value_before_softmax: bool
     value_initialized: str
+    mode: str = "dynamic"
 
     # We want to emulate a simple form of immutability while keeping the ability to add custom attributes.
     # Therefore, we don't allow changing attribute values if set once.
@@ -445,6 +446,7 @@ class StaticAdapterFusionConfig(AdapterFusionConfig):
     temperature: bool = False
     value_before_softmax: bool = True
     value_initialized: str = False
+    mode: str = "dynamic"
 
 
 @dataclass
@@ -463,8 +465,67 @@ class DynamicAdapterFusionConfig(AdapterFusionConfig):
     temperature: bool = False
     value_before_softmax: bool = True
     value_initialized: str = True
+    mode: str = "dynamic"
 
 
-ADAPTERFUSION_CONFIG_MAP = {"static": StaticAdapterFusionConfig(), "dynamic": DynamicAdapterFusionConfig()}
+@dataclass
+class SwitchAdapterFusionConfig(AdapterFusionConfig):
+    """
+    Switch version of adapter fusion.
+    """
+
+    key: bool = False
+    query: bool = False
+    value: bool = False
+    query_before_ln: bool = False
+    regularization: bool = False
+    residual_before: bool = False
+    temperature: bool = False
+    value_before_softmax: bool = False
+    value_initialized: str = False
+    mode: str = "switch"
+
+
+@dataclass
+class WeightedAverageAdapterFusionConfig(AdapterFusionConfig):
+    """
+    Weighted average version of adapter fusion.
+    """
+
+    key: bool = False
+    query: bool = False
+    value: bool = False
+    query_before_ln: bool = False
+    regularization: bool = False
+    residual_before: bool = False
+    temperature: bool = False
+    value_before_softmax: bool = False
+    value_initialized: str = False
+    mode: str = "weighted-average"
+
+
+@dataclass
+class GatedAdapterFusionConfig(AdapterFusionConfig):
+    """
+    Gated version of adapter fusion.
+    """
+
+    key: bool = False
+    query: bool = False
+    value: bool = False
+    query_before_ln: bool = False
+    regularization: bool = False
+    residual_before: bool = False
+    temperature: bool = False
+    value_before_softmax: bool = False
+    value_initialized: str = False
+    mode: str = "gated"
+
+
+ADAPTERFUSION_CONFIG_MAP = {"static": StaticAdapterFusionConfig(),
+                            "dynamic": DynamicAdapterFusionConfig(),
+                            "switch": SwitchAdapterFusionConfig(),
+                            "weighted-average": WeightedAverageAdapterFusionConfig(),
+                            "gated": GatedAdapterFusionConfig()}
 
 DEFAULT_ADAPTERFUSION_CONFIG = "dynamic"

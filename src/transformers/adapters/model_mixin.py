@@ -242,7 +242,6 @@ class ModelAdaptersMixin(PushAdapterToHubMixin, ABC):
         config=None,
         overwrite_ok: bool = False,
         set_active: bool = False,
-        mode: str = "dynamic",
     ):
         """
         Adds AdapterFusion to the model with alll the necessary configurations and weight initializations
@@ -272,7 +271,7 @@ class ModelAdaptersMixin(PushAdapterToHubMixin, ABC):
         if overwrite_ok and self.config.adapters.get_fusion(adapter_names) is not None:
             self.delete_adapter_fusion(adapter_names)
         self.config.adapters.add_fusion(adapter_names, config=config)
-        self.base_model._add_fusion_layer(adapter_names, mode=mode)
+        self.base_model._add_fusion_layer(adapter_names, mode=config["mode"])
         if set_active:
             if not isinstance(adapter_names, list):
                 adapter_names = adapter_names.split(",")
