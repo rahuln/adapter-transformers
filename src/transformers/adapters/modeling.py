@@ -313,6 +313,40 @@ class BertWeightedAverageFusion(nn.Module):
         return outputs
 
 
+class BertGatedFusion(nn.Module):
+    # Implementation of an AdapterFusion block that uses a gating function to
+    # compute weights for a weighted average of adapter outputs
+
+    def __init__(
+        self,
+        config: AdapterFusionConfig,
+        dense_size,
+        num_adapters,
+    ):
+        super(BertGatedFusion, self).__init__()
+        self.config = config
+        self.dense_size = dense_size
+        self.num_adapters = num_adapters
+        self.gating_fn = torch.nn.Linear(self.dense_size, self.num_adapters)
+
+    def forward(self, inputs, adapter_outputs, adapter_outputs_copy, residual,
+        **kwargs):
+        # adapter_outputs have dims => batch, toks, number-of-adapters, feats
+
+        if self.config["residual_before"]:
+            adapter_outputs += residual[:, :, None, :].repeat(1, 1, self.num_adapters, 1)
+
+        # apply gating function to compute weights, use weights to compute
+        # weighted average of adapter outputs
+        weights = torch.softmax(self.gating_fn(inputs), dim=-1).unsqueeze(2)
+        outputs = torch.matmul(weights, adapter_outputs).squeeze(2)
+
+        if not self.config["residual_before"]:
+            outputs += residual
+
+        return outputs
+
+
 # Invertible Adapters
 
 
