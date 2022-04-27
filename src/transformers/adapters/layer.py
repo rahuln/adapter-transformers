@@ -98,6 +98,14 @@ class AdapterLayerBaseMixin(ABC):
                     fusion_config,
                     self.config.hidden_size,
                     len(adapter_names),
+                    mean=False,
+                )
+            elif mode == "gated-mean":
+                fusion = BertGatedFusion(
+                    fusion_config,
+                    self.config.hidden_size,
+                    len(adapter_names),
+                    mean=True,
                 )
             else:
                 raise ValueError(f"unrecognized fusion mode: {mode}")

@@ -522,10 +522,13 @@ class GatedAdapterFusionConfig(AdapterFusionConfig):
     mode: str = "gated"
 
 
-ADAPTERFUSION_CONFIG_MAP = {"static": StaticAdapterFusionConfig(),
-                            "dynamic": DynamicAdapterFusionConfig(),
-                            "switch": SwitchAdapterFusionConfig(),
-                            "weighted-average": WeightedAverageAdapterFusionConfig(),
-                            "gated": GatedAdapterFusionConfig()}
+ADAPTERFUSION_CONFIG_MAP = {
+    "static": StaticAdapterFusionConfig(),
+    "dynamic": DynamicAdapterFusionConfig(),
+    "switch": SwitchAdapterFusionConfig(),
+    "weighted-average": WeightedAverageAdapterFusionConfig(),
+    "gated": GatedAdapterFusionConfig(),
+    "gated-mean": GatedAdapterFusionConfig(mode="gated-mean"),
+}
 
 DEFAULT_ADAPTERFUSION_CONFIG = "dynamic"

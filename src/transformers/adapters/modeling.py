@@ -322,11 +322,13 @@ class BertGatedFusion(nn.Module):
         config: AdapterFusionConfig,
         dense_size,
         num_adapters,
+        mean=False,
     ):
         super(BertGatedFusion, self).__init__()
         self.config = config
         self.dense_size = dense_size
         self.num_adapters = num_adapters
+        self.mean = mean
         self.gating_fn = torch.nn.Linear(self.dense_size, self.num_adapters)
 
     def forward(self, inputs, adapter_outputs, adapter_outputs_copy, residual,
@@ -338,8 +340,16 @@ class BertGatedFusion(nn.Module):
 
         # apply gating function to compute weights, use weights to compute
         # weighted average of adapter outputs
-        weights = torch.softmax(self.gating_fn(inputs), dim=-1).unsqueeze(2)
-        outputs = torch.matmul(weights, adapter_outputs).squeeze(2)
+        if self.mean:
+            # average inputs over sequence before applying gating function
+            seq = adapter_outputs.size(1)
+            avg_inputs = inputs.mean(dim=1)
+            weights = torch.softmax(self.gating_fn(avg_inputs), dim=-1)
+            weights = weights.unsqueeze(1).unsqueeze(2).repeat(1, seq, 1, 1)
+            outputs = torch.matmul(weights, adapter_outputs).squeeze(2)
+        else:
+            weights = torch.softmax(self.gating_fn(inputs), dim=-1).unsqueeze(2)
+            outputs = torch.matmul(weights, adapter_outputs).squeeze(2)
 
         if not self.config["residual_before"]:
             outputs += residual
