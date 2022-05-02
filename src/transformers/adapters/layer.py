@@ -92,6 +92,14 @@ class AdapterLayerBaseMixin(ABC):
                     fusion_config,
                     self.config.hidden_size,
                     len(adapter_names),
+                    weights_in_kwargs=False,
+                )
+            elif mode == "weighted-average-inputs":
+                fusion = BertWeightedAverageFusion(
+                    fusion_config,
+                    self.config.hidden_size,
+                    len(adapter_names),
+                    weights_in_kwargs=True,
                 )
             elif mode == "gated":
                 fusion = BertGatedFusion(

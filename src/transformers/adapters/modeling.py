@@ -286,12 +286,15 @@ class BertWeightedAverageFusion(nn.Module):
         config: AdapterFusionConfig,
         dense_size,
         num_adapters,
+        weights_in_kwargs=False,
     ):
         super(BertWeightedAverageFusion, self).__init__()
         self.config = config
         self.dense_size = dense_size
         self.num_adapters = num_adapters
-        self.fusion_weights = torch.nn.Parameter(torch.ones(num_adapters))
+        self.weights_in_kwargs = weights_in_kwargs
+        if not self.weights_in_kwargs:
+            self.fusion_weights = torch.nn.Parameter(torch.ones(num_adapters))
 
     def forward(self, inputs, adapter_outputs, adapter_outputs_copy, residual,
         **kwargs):
@@ -303,8 +306,11 @@ class BertWeightedAverageFusion(nn.Module):
         # convert unnormalized weights to weights, add dimensions to weights
         # parameter, multiply with adapter outputs, and average across the
         # adapters dimension
-        weights = torch.softmax(self.fusion_weights, dim=0)
-        outputs = weights[None, None, :, None] * adapter_outputs
+        if self.weights_in_kwargs:  # assume weights have batch size dimension
+            weights = kwargs["adapter_weights"][:, None, :, None]
+        else:
+            weights = torch.softmax(fusion_weights, dim=0)[None, None, :, None]
+        outputs = weights * adapter_outputs
         outputs = torch.sum(outputs, dim=2)
 
         if not self.config["residual_before"]:

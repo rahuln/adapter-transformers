@@ -61,6 +61,7 @@ class RobertaConfig(BertConfig):
         >>> configuration = model.config
     """
     model_type = "roberta"
+    num_adapters = None
 
     def __init__(self, pad_token_id=1, bos_token_id=0, eos_token_id=2, **kwargs):
         """Constructs RobertaConfig."""

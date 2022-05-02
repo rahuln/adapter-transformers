@@ -748,6 +748,9 @@ class RobertaModel(BertModelAdaptersMixin, RobertaPreTrainedModel):
 
         self.init_weights()
 
+        if config.num_adapters is not None:
+            self.gating_fn = torch.nn.Linear(config.hidden_size, config.num_adapters, bias=False)
+
     def get_input_embeddings(self):
         return self.embeddings.word_embeddings
 
@@ -874,6 +877,15 @@ class RobertaModel(BertModelAdaptersMixin, RobertaPreTrainedModel):
             inputs_embeds=inputs_embeds,
             past_key_values_length=past_key_values_length,
         )
+
+        # calculate adapter weights using gating function applied to mean
+        # embedding over tokens for each example
+        if self.config.num_adapters is not None:
+            masked_embeddings = embedding_output * attention_mask.unsqueeze(2)
+            mean_embeddings = masked_embeddings.sum(dim=1) / attention_mask.sum(dim=1).unsqueeze(1)
+            adapter_weights = torch.softmax(self.gating_fn(mean_embeddings), dim=1)
+            kwargs["adapter_weights"] = adapter_weights
+
         embedding_output = self.invertible_adapters_forward(embedding_output)
 
         encoder_outputs = self.encoder(
