@@ -1076,6 +1076,7 @@ class Trainer:
 
         if resume_from_checkpoint is not None:
             self._load(resume_from_checkpoint)
+            model_reloaded = True
 
         # If model was re-initialized, put it on the right device and update self.model_wrapped
         if model_reloaded:
