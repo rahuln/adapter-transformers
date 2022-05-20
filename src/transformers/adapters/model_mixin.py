@@ -132,7 +132,9 @@ class ModelAdaptersMixin(PushAdapterToHubMixin, ABC):
             self._add_adapter(adapter_name)
         # Initialize fusion from config
         for fusion_name in self.config.adapters.fusions:
-            self._add_fusion_layer(fusion_name)
+            key = self.config.adapters.fusions[fusion_name]
+            mode = self.config.adapters.fusion_config_map[key]["mode"]
+            self._add_fusion_layer(fusion_name, mode=mode)
 
         self.loaded_embeddings["default"] = self.get_input_embeddings()
 
