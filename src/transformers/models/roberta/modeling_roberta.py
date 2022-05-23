@@ -393,7 +393,30 @@ class RobertaOutput(BertOutputAdaptersMixin, nn.Module):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.adapters_forward(hidden_states, input_tensor, **kwargs)
-        return hidden_states
+        return hidden_states, None
+
+
+# version of RobertaOutput layer that includes gating function applied to
+# hidden states to output mixture weights for adapters at later layers
+class RobertaOutputWithGatingFn(BertOutputAdaptersMixin, nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.gating_fn = nn.Linear(config.hidden_size, config.num_adapters, bias=False)
+        self._init_adapter_modules()
+
+    def forward(self, hidden_states, input_tensor, **kwargs):
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        adapter_weights = torch.softmax(
+            self.gating_fn(hidden_states.mean(dim=1)), dim=1)
+        kwargs["adapter_weights"] = adapter_weights
+        hidden_states = self.adapters_forward(hidden_states, input_tensor, **kwargs)
+        return hidden_states, adapter_weights
 
 
 # Copied from transformers.models.bert.modeling_bert.BertLayer with Bert->Roberta
@@ -467,7 +490,7 @@ class RobertaLayer(BertLayerAdaptersMixin, nn.Module):
             cross_attn_present_key_value = cross_attention_outputs[-1]
             present_key_value = present_key_value + cross_attn_present_key_value
 
-        layer_output = apply_chunking_to_forward(
+        layer_output, adapter_weights = apply_chunking_to_forward(
             self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output, **kwargs
         )
         outputs = (layer_output,) + outputs
@@ -476,12 +499,15 @@ class RobertaLayer(BertLayerAdaptersMixin, nn.Module):
         if self.is_decoder:
             outputs = outputs + (present_key_value,)
 
+        # keep track of adapter_weights to pass through all later layers
+        outputs = outputs + (adapter_weights,)
+
         return outputs
 
     def feed_forward_chunk(self, attention_output, **kwargs):
         intermediate_output = self.intermediate(attention_output)
-        layer_output = self.output(intermediate_output, attention_output, **kwargs)
-        return layer_output
+        layer_output, adapter_weights = self.output(intermediate_output, attention_output, **kwargs)
+        return layer_output, adapter_weights
 
 
 # Copied from transformers.models.bert.modeling_bert.BertEncoder with Bert->Roberta
@@ -556,11 +582,15 @@ class RobertaEncoder(BertEncoderAdaptersMixin, nn.Module):
             attention_mask = self.adjust_attention_mask_for_parallel(hidden_states, attention_mask)
 
             if use_cache:
-                next_decoder_cache += (layer_outputs[-1],)
+                next_decoder_cache += (layer_outputs[-2],)
             if output_attentions:
                 all_self_attentions = all_self_attentions + (layer_outputs[1],)
                 if self.config.add_cross_attention:
                     all_cross_attentions = all_cross_attentions + (layer_outputs[2],)
+
+            # keep track of adapter_weights for later layers if not None
+            if layer_outputs[-1] is not None:
+                kwargs["adapter_weights"] = layer_outputs[-1]
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -748,7 +778,7 @@ class RobertaModel(BertModelAdaptersMixin, RobertaPreTrainedModel):
 
         self.init_weights()
 
-        if config.num_adapters is not None:
+        if config.adapter_fusion_mode == "weighted-average-inputs":
             self.gating_fn = torch.nn.Linear(config.hidden_size, config.num_adapters, bias=False)
 
     def get_input_embeddings(self):
@@ -880,7 +910,7 @@ class RobertaModel(BertModelAdaptersMixin, RobertaPreTrainedModel):
 
         # calculate adapter weights using gating function applied to mean
         # embedding over tokens for each example
-        if self.config.num_adapters is not None:
+        if self.config.adapter_fusion_mode == "weighted-average-inputs":
             masked_embeddings = embedding_output * attention_mask.unsqueeze(2)
             mean_embeddings = masked_embeddings.sum(dim=1) / attention_mask.sum(dim=1).unsqueeze(1)
             adapter_weights = torch.softmax(self.gating_fn(mean_embeddings), dim=1)

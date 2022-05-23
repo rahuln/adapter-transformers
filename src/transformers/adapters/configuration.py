@@ -528,6 +528,7 @@ ADAPTERFUSION_CONFIG_MAP = {
     "switch": SwitchAdapterFusionConfig(),
     "weighted-average": WeightedAverageAdapterFusionConfig(),
     "weighted-average-inputs": WeightedAverageAdapterFusionConfig(mode="weighted-average-inputs"),
+    "weighted-average-first-feedforward": WeightedAverageAdapterFusionConfig(mode="weighted-average-first-feedforward"),
     "gated": GatedAdapterFusionConfig(),
     "gated-mean": GatedAdapterFusionConfig(mode="gated-mean"),
 }

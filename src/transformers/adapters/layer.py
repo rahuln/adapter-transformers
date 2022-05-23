@@ -94,7 +94,7 @@ class AdapterLayerBaseMixin(ABC):
                     len(adapter_names),
                     weights_in_kwargs=False,
                 )
-            elif mode == "weighted-average-inputs":
+            elif mode in ("weighted-average-inputs", "weighted-average-first-feedforward"):
                 fusion = BertWeightedAverageFusion(
                     fusion_config,
                     self.config.hidden_size,
