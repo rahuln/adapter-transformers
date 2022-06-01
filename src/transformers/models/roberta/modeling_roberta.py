@@ -399,14 +399,17 @@ class RobertaOutput(BertOutputAdaptersMixin, nn.Module):
 # version of RobertaOutput layer that includes gating function applied to
 # hidden states to output mixture weights for adapters at later layers
 class RobertaOutputWithGatingFn(BertOutputAdaptersMixin, nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, gating_fn=None):
         super().__init__()
         self.config = config
 
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.gating_fn = nn.Linear(config.hidden_size, config.num_adapters, bias=False)
+        if gating_fn is None:
+            self.gating_fn = nn.Linear(config.hidden_size, config.num_adapters, bias=False)
+        else:
+            self.gating_fn = gating_fn
         self._init_adapter_modules()
 
     def forward(self, hidden_states, input_tensor, **kwargs):
