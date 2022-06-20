@@ -407,7 +407,10 @@ class RobertaOutputWithGatingFn(BertOutputAdaptersMixin, nn.Module):
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         if gating_fn is None:
-            self.gating_fn = nn.Linear(config.hidden_size, config.num_adapters, bias=False)
+            self.gating_fn = nn.Sequential(
+                nn.Linear(config.hidden_size, config.num_adapters, bias=False),
+                nn.Softmax(dim=1)
+            )
         else:
             self.gating_fn = gating_fn
         self._init_adapter_modules()
@@ -415,8 +418,7 @@ class RobertaOutputWithGatingFn(BertOutputAdaptersMixin, nn.Module):
     def forward(self, hidden_states, input_tensor, **kwargs):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        adapter_weights = torch.softmax(
-            self.gating_fn(hidden_states.mean(dim=1)), dim=1)
+        adapter_weights = self.gating_fn(hidden_states.mean(dim=1))
         kwargs["adapter_weights"] = adapter_weights
         hidden_states = self.adapters_forward(hidden_states, input_tensor, **kwargs)
         return hidden_states, adapter_weights
