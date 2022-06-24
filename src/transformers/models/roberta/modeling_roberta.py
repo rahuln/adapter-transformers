@@ -540,6 +540,7 @@ class RobertaEncoder(BertEncoderAdaptersMixin, nn.Module):
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
         all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
+        all_adapter_weights = ()
 
         next_decoder_cache = () if use_cache else None
         for i, layer_module in enumerate(self.layer):
@@ -596,6 +597,7 @@ class RobertaEncoder(BertEncoderAdaptersMixin, nn.Module):
             # keep track of adapter_weights for later layers if not None
             if layer_outputs[-1] is not None:
                 kwargs["adapter_weights"] = layer_outputs[-1]
+                all_adapter_weights = all_adapter_weights + (layer_outputs[-1],)
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -609,16 +611,20 @@ class RobertaEncoder(BertEncoderAdaptersMixin, nn.Module):
                     all_hidden_states,
                     all_self_attentions,
                     all_cross_attentions,
+                    all_adapter_weights,
                 ]
                 if v is not None
             )
-        return BaseModelOutputWithPastAndCrossAttentions(
+        outputs = BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
             past_key_values=next_decoder_cache,
             hidden_states=all_hidden_states,
             attentions=all_self_attentions,
             cross_attentions=all_cross_attentions,
         )
+        if all_adapter_weights:
+            outputs['adapter_weights'] = all_adapter_weights
+        return outputs
 
 
 # Copied from transformers.models.bert.modeling_bert.BertPooler
@@ -942,7 +948,7 @@ class RobertaModel(BertModelAdaptersMixin, RobertaPreTrainedModel):
         if not return_dict:
             return (sequence_output, pooled_output) + encoder_outputs[1:]
 
-        return BaseModelOutputWithPoolingAndCrossAttentions(
+        outputs = BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
             past_key_values=encoder_outputs.past_key_values,
@@ -950,6 +956,9 @@ class RobertaModel(BertModelAdaptersMixin, RobertaPreTrainedModel):
             attentions=encoder_outputs.attentions,
             cross_attentions=encoder_outputs.cross_attentions,
         )
+        if 'adapter_weights' in encoder_outputs and encoder_outputs['adapter_weights']:
+            outputs['adapter_weights'] = encoder_outputs['adapter_weights']
+        return outputs
 
 
 @add_start_docstrings(
@@ -1029,6 +1038,8 @@ class RobertaModelWithHeads(BertModelHeadsMixin, RobertaPreTrainedModel):
                 pooled_output=pooled_output,
                 **kwargs,
             )
+            if 'adapter_weights' in outputs and outputs['adapter_weights']:
+                head_outputs['adapter_weights'] = outputs['adapter_weights']
             return head_outputs
         else:
             # in case no head is used just return the output of the base model (including pooler output)
