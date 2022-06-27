@@ -1040,6 +1040,23 @@ class RobertaModelWithHeads(BertModelHeadsMixin, RobertaPreTrainedModel):
             )
             if 'adapter_weights' in outputs and outputs['adapter_weights']:
                 head_outputs['adapter_weights'] = outputs['adapter_weights']
+
+            # calculate load balancing loss here, add it to the loss output
+            # from the head
+            if self.roberta.config.switch_load_bal_reg_param > 0 and \
+                'loss' in head_outputs:
+                weights = head_outputs['adapter_weights']
+                N = self.roberta.config.num_adapters
+                alpha = self.roberta.config.switch_load_bal_reg_param
+                for i in range(len(weights)):
+                    frac = torch.bincount(weights[i].argmax(dim=1).detach(),
+                                          minlength=N)
+                    frac = frac / weights[i].size(0)
+                    prob = weights[i].mean(dim=0)
+                    load_balancing_loss = alpha * N * torch.dot(frac, prob)
+                    head_outputs['loss'] = \
+                        head_outputs['loss'] + load_balancing_loss
+
             return head_outputs
         else:
             # in case no head is used just return the output of the base model (including pooler output)
