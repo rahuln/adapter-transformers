@@ -419,6 +419,14 @@ class RobertaOutputWithGatingFn(BertOutputAdaptersMixin, nn.Module):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         adapter_weights = self.gating_fn(hidden_states.mean(dim=1))
+
+        # compute weighted average of gating fn output distribution and
+        # prior specified by adapter_indices
+        if 'adapter_indices' in kwargs and self.config.router_prior_reg_param > 0:
+            prior = torch.nn.functional.one_hot(kwargs['adapter_indices'], num_classes=self.config.num_adapters).float()
+            alpha = self.config.router_prior_reg_param
+            adapter_weights = (1 - alpha) * adapter_weights + alpha * prior
+
         kwargs["adapter_weights"] = adapter_weights
         hidden_states = self.adapters_forward(hidden_states, input_tensor, **kwargs)
         return hidden_states, adapter_weights
