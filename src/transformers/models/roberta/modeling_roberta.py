@@ -418,7 +418,12 @@ class RobertaOutputWithGatingFn(BertOutputAdaptersMixin, nn.Module):
     def forward(self, hidden_states, input_tensor, **kwargs):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        adapter_weights = self.gating_fn(hidden_states.mean(dim=1))
+
+        # use attention mask to select non-padding token embeddings, calculate
+        # mean across sequence, then input to gating function
+        mask = kwargs['original_attention_mask'].unsqueeze(-1)
+        mean_hidden_states = (hidden_states * mask).sum(dim=1) / mask.sum(dim=1)
+        adapter_weights = self.gating_fn(mean_hidden_states)
 
         # compute weighted average of gating fn output distribution and
         # prior specified by adapter_indices
@@ -936,6 +941,10 @@ class RobertaModel(BertModelAdaptersMixin, RobertaPreTrainedModel):
             kwargs["adapter_weights"] = adapter_weights
 
         embedding_output = self.invertible_adapters_forward(embedding_output)
+
+        # add attention mask to kwargs to use when computing mean embedding
+        # for each example as input to gating function
+        kwargs['original_attention_mask'] = attention_mask
 
         encoder_outputs = self.encoder(
             embedding_output,
