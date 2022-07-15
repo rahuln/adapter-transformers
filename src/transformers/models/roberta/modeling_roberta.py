@@ -19,6 +19,7 @@ import math
 
 import torch
 import torch.utils.checkpoint
+import torch.nn.functional as F
 from packaging import version
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
@@ -978,6 +979,19 @@ class RobertaModel(BertModelAdaptersMixin, RobertaPreTrainedModel):
         return outputs
 
 
+def symmetric_KL_loss(input, target, reduction='batchmean'):
+    """ symmetric KL-divergence 1/2*(KL(p||q)+KL(q||p))
+        taken from https://github.com/microsoft/AdaMix """
+
+    input = input.float()
+    target = target.float()
+    loss = F.kl_div(F.log_softmax(input, dim=-1, dtype=torch.float32),
+                    F.softmax(target.detach(), dim=-1, dtype=torch.float32), reduction=reduction) + \
+           F.kl_div(F.log_softmax(target, dim=-1, dtype=torch.float32),
+                    F.softmax(input.detach(), dim=-1, dtype=torch.float32), reduction=reduction)
+    return 0.5 * loss.sum()
+
+
 @add_start_docstrings(
     """Roberta Model transformer with the option to add multiple flexible heads on top.""",
     ROBERTA_START_DOCSTRING,
@@ -1073,6 +1087,44 @@ class RobertaModelWithHeads(BertModelHeadsMixin, RobertaPreTrainedModel):
                     load_balancing_loss = alpha * N * torch.dot(frac, prob)
                     head_outputs['loss'] = \
                         head_outputs['loss'] + load_balancing_loss
+
+            # add consistency regularization to loss
+            if self.roberta.config.use_consistency_regularization and \
+                'loss' in head_outputs and self.roberta.training:
+
+                # perform additional forward pass through model and head
+                outputs = self.roberta(
+                    input_ids,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids,
+                    position_ids=position_ids,
+                    head_mask=head_mask,
+                    inputs_embeds=inputs_embeds,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                    adapter_names=adapter_names,
+                    **kwargs,
+                )
+
+                if not return_dict:
+                    head_inputs = (outputs[0],) + outputs[2:]
+                else:
+                    head_inputs = outputs
+                pooled_output = outputs[1]
+
+                additional_head_outputs = self.forward_head(
+                    head_inputs,
+                    head_name=head,
+                    attention_mask=attention_mask,
+                    return_dict=return_dict,
+                    pooled_output=pooled_output,
+                    **kwargs,
+                )
+
+                head_outputs['loss'] += \
+                    symmetric_KL_loss(head_outputs['logits'],
+                                      additional_head_outputs['logits'])
 
             return head_outputs
         else:
