@@ -120,6 +120,11 @@ class BertConfig(ModelConfigAdaptersMixin, PretrainedConfig):
         >>> configuration = model.config
     """
     model_type = "bert"
+    num_adapters = None
+    adapter_fusion_mode = None
+    switch_load_bal_reg_param = 0.0
+    router_prior_reg_param = 0.0
+    use_consistency_regularization = False
 
     def __init__(
         self,

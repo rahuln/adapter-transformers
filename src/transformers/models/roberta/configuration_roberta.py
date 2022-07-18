@@ -61,11 +61,6 @@ class RobertaConfig(BertConfig):
         >>> configuration = model.config
     """
     model_type = "roberta"
-    num_adapters = None
-    adapter_fusion_mode = None
-    switch_load_bal_reg_param = 0.0
-    router_prior_reg_param = 0.0
-    use_consistency_regularization = False
 
     def __init__(self, pad_token_id=1, bos_token_id=0, eos_token_id=2, **kwargs):
         """Constructs RobertaConfig."""
