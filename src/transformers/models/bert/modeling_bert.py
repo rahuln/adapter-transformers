@@ -24,6 +24,7 @@ from typing import Optional, Tuple
 
 import torch
 import torch.utils.checkpoint
+import torch.nn.functional as F
 from packaging import version
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
@@ -453,7 +454,48 @@ class BertOutput(BertOutputAdaptersMixin, nn.Module):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.adapters_forward(hidden_states, input_tensor, **kwargs)
-        return hidden_states
+        return hidden_states, None
+
+
+# version of BertOutput layer that includes gating function applied to
+# hidden states to output mixture weights for adapters at later layers
+class BertOutputWithGatingFn(BertOutputAdaptersMixin, nn.Module):
+    def __init__(self, config, gating_fn=None):
+        super().__init__()
+        self.config = config
+
+        self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        if gating_fn is None:
+            self.gating_fn = nn.Sequential(
+                nn.Linear(config.hidden_size, config.num_adapters, bias=False),
+                nn.Softmax(dim=1)
+            )
+        else:
+            self.gating_fn = gating_fn
+        self._init_adapter_modules()
+
+    def forward(self, hidden_states, input_tensor, **kwargs):
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+
+        # use attention mask to select non-padding token embeddings, calculate
+        # mean across sequence, then input to gating function
+        mask = kwargs['original_attention_mask'].unsqueeze(-1)
+        mean_hidden_states = (hidden_states * mask).sum(dim=1) / mask.sum(dim=1)
+        adapter_weights = self.gating_fn(mean_hidden_states)
+
+        # compute weighted average of gating fn output distribution and
+        # prior specified by adapter_indices
+        if 'adapter_indices' in kwargs and self.config.router_prior_reg_param > 0:
+            prior = torch.nn.functional.one_hot(kwargs['adapter_indices'], num_classes=self.config.num_adapters).float()
+            alpha = self.config.router_prior_reg_param
+            adapter_weights = (1 - alpha) * adapter_weights + alpha * prior
+
+        kwargs["adapter_weights"] = adapter_weights
+        hidden_states = self.adapters_forward(hidden_states, input_tensor, **kwargs)
+        return hidden_states, adapter_weights
 
 
 class BertLayer(BertLayerAdaptersMixin, nn.Module):
@@ -526,7 +568,7 @@ class BertLayer(BertLayerAdaptersMixin, nn.Module):
             cross_attn_present_key_value = cross_attention_outputs[-1]
             present_key_value = present_key_value + cross_attn_present_key_value
 
-        layer_output = apply_chunking_to_forward(
+        layer_output, adapter_weights = apply_chunking_to_forward(
             self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output, **kwargs
         )
         outputs = (layer_output,) + outputs
@@ -535,12 +577,15 @@ class BertLayer(BertLayerAdaptersMixin, nn.Module):
         if self.is_decoder:
             outputs = outputs + (present_key_value,)
 
+        # keep track of adapter_weights to pass through all later layers
+        outputs = outputs + (adapter_weights,)
+
         return outputs
 
     def feed_forward_chunk(self, attention_output, **kwargs):
         intermediate_output = self.intermediate(attention_output)
-        layer_output = self.output(intermediate_output, attention_output, **kwargs)
-        return layer_output
+        layer_output, adapter_weights = self.output(intermediate_output, attention_output, **kwargs)
+        return layer_output, adapter_weights
 
 
 class BertEncoder(BertEncoderAdaptersMixin, nn.Module):
@@ -567,6 +612,7 @@ class BertEncoder(BertEncoderAdaptersMixin, nn.Module):
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
         all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
+        all_adapter_weights = ()
 
         next_decoder_cache = () if use_cache else None
         for i, layer_module in enumerate(self.layer):
@@ -614,11 +660,16 @@ class BertEncoder(BertEncoderAdaptersMixin, nn.Module):
             attention_mask = self.adjust_attention_mask_for_parallel(hidden_states, attention_mask)
 
             if use_cache:
-                next_decoder_cache += (layer_outputs[-1],)
+                next_decoder_cache += (layer_outputs[-2],)
             if output_attentions:
                 all_self_attentions = all_self_attentions + (layer_outputs[1],)
                 if self.config.add_cross_attention:
                     all_cross_attentions = all_cross_attentions + (layer_outputs[2],)
+
+            # keep track of adapter_weights for later layers if not None
+            if layer_outputs[-1] is not None:
+                kwargs["adapter_weights"] = layer_outputs[-1]
+                all_adapter_weights = all_adapter_weights + (layer_outputs[-1],)
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -632,16 +683,20 @@ class BertEncoder(BertEncoderAdaptersMixin, nn.Module):
                     all_hidden_states,
                     all_self_attentions,
                     all_cross_attentions,
+                    all_adapter_weights,
                 ]
                 if v is not None
             )
-        return BaseModelOutputWithPastAndCrossAttentions(
+        outputs = BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
             past_key_values=next_decoder_cache,
             hidden_states=all_hidden_states,
             attentions=all_self_attentions,
             cross_attentions=all_cross_attentions,
         )
+        if all_adapter_weights:
+            outputs['adapter_weights'] = all_adapter_weights
+        return outputs
 
 
 class BertPooler(nn.Module):
@@ -896,6 +951,9 @@ class BertModel(BertModelAdaptersMixin, BertPreTrainedModel):
 
         self.init_weights()
 
+        if config.adapter_fusion_mode == "weighted-average-inputs":
+            self.gating_fn = torch.nn.Linear(config.hidden_size, config.num_adapters, bias=False)
+
     def get_input_embeddings(self):
         return self.embeddings.word_embeddings
 
@@ -1021,7 +1079,20 @@ class BertModel(BertModelAdaptersMixin, BertPreTrainedModel):
             inputs_embeds=inputs_embeds,
             past_key_values_length=past_key_values_length,
         )
+
+        # calculate adapter weights using gating function applied to mean
+        # embedding over tokens for each example
+        if self.config.adapter_fusion_mode == "weighted-average-inputs":
+            masked_embeddings = embedding_output * attention_mask.unsqueeze(2)
+            mean_embeddings = masked_embeddings.sum(dim=1) / attention_mask.sum(dim=1).unsqueeze(1)
+            adapter_weights = torch.softmax(self.gating_fn(mean_embeddings), dim=1)
+            kwargs["adapter_weights"] = adapter_weights
+
         embedding_output = self.invertible_adapters_forward(embedding_output)
+
+        # add attention mask to kwargs to use when computing mean embedding
+        # for each example as input to gating function
+        kwargs['original_attention_mask'] = attention_mask
 
         encoder_outputs = self.encoder(
             embedding_output,
@@ -1042,7 +1113,7 @@ class BertModel(BertModelAdaptersMixin, BertPreTrainedModel):
         if not return_dict:
             return (sequence_output, pooled_output) + encoder_outputs[1:]
 
-        return BaseModelOutputWithPoolingAndCrossAttentions(
+        outputs = BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
             past_key_values=encoder_outputs.past_key_values,
@@ -1050,6 +1121,22 @@ class BertModel(BertModelAdaptersMixin, BertPreTrainedModel):
             attentions=encoder_outputs.attentions,
             cross_attentions=encoder_outputs.cross_attentions,
         )
+        if 'adapter_weights' in encoder_outputs and encoder_outputs['adapter_weights']:
+            outputs['adapter_weights'] = encoder_outputs['adapter_weights']
+        return outputs
+
+
+def symmetric_KL_loss(input, target, reduction='batchmean'):
+    """ symmetric KL-divergence 1/2*(KL(p||q)+KL(q||p))
+        taken from https://github.com/microsoft/AdaMix """
+
+    input = input.float()
+    target = target.float()
+    loss = F.kl_div(F.log_softmax(input, dim=-1, dtype=torch.float32),
+                    F.softmax(target.detach(), dim=-1, dtype=torch.float32), reduction=reduction) + \
+           F.kl_div(F.log_softmax(target, dim=-1, dtype=torch.float32),
+                    F.softmax(input.detach(), dim=-1, dtype=torch.float32), reduction=reduction)
+    return 0.5 * loss.sum()
 
 
 @add_start_docstrings(
@@ -1105,6 +1192,7 @@ class BertModelWithHeads(BertModelHeadsMixin, BertPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             adapter_names=adapter_names,
+            **kwargs,
         )
         # BERT & RoBERTa return the pooled output as second item, we don't need that in these heads
         if not return_dict:
@@ -1122,6 +1210,63 @@ class BertModelWithHeads(BertModelHeadsMixin, BertPreTrainedModel):
                 pooled_output=pooled_output,
                 **kwargs,
             )
+            if 'adapter_weights' in outputs and outputs['adapter_weights']:
+                head_outputs['adapter_weights'] = outputs['adapter_weights']
+
+            # calculate load balancing loss here, add it to the loss output
+            # from the head
+            if self.bert.config.switch_load_bal_reg_param > 0 and \
+                'loss' in head_outputs:
+                weights = head_outputs['adapter_weights']
+                N = self.bert.config.num_adapters
+                alpha = self.bert.config.switch_load_bal_reg_param
+                for i in range(len(weights)):
+                    frac = torch.bincount(weights[i].argmax(dim=1).detach(),
+                                          minlength=N)
+                    frac = frac / weights[i].size(0)
+                    prob = weights[i].mean(dim=0)
+                    load_balancing_loss = alpha * N * torch.dot(frac, prob)
+                    head_outputs['loss'] = \
+                        head_outputs['loss'] + load_balancing_loss
+
+            # add consistency regularization to loss
+            if self.bert.config.use_consistency_regularization and \
+                'loss' in head_outputs and self.bert.training:
+
+                # perform additional forward pass through model and head
+                outputs = self.bert(
+                    input_ids,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids,
+                    position_ids=position_ids,
+                    head_mask=head_mask,
+                    inputs_embeds=inputs_embeds,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                    adapter_names=adapter_names,
+                    **kwargs,
+                )
+
+                if not return_dict:
+                    head_inputs = (outputs[0],) + outputs[2:]
+                else:
+                    head_inputs = outputs
+                pooled_output = outputs[1]
+
+                additional_head_outputs = self.forward_head(
+                    head_inputs,
+                    head_name=head,
+                    attention_mask=attention_mask,
+                    return_dict=return_dict,
+                    pooled_output=pooled_output,
+                    **kwargs,
+                )
+
+                head_outputs['loss'] += \
+                    symmetric_KL_loss(head_outputs['logits'],
+                                      additional_head_outputs['logits'])
+
             return head_outputs
         else:
             # in case no head is used just return the output of the base model (including pooler output)
